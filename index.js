@@ -14,7 +14,7 @@ function log(msg) {
 
 function stop() {
     running = false;
-    log("STOPPED");
+    log("🛑 STOPPED");
 }
 
 async function waitFor(getter, name) {
@@ -48,7 +48,85 @@ function nextImage() {
         cancelable: true
     }));
 
-    log("→ Next image");
+    log("→ Right Arrow pressed");
+}
+
+/*
+ * Get something that identifies the currently displayed image.
+ *
+ * We use the visible image/video elements and capture their
+ * current source information. If Flow changes to another image,
+ * this value should change.
+ */
+function getCurrentImageSignature() {
+    const elements = [...document.querySelectorAll("img")];
+
+    const visibleImages = elements.filter(img => {
+        const rect = img.getBoundingClientRect();
+        const style = getComputedStyle(img);
+
+        return (
+            rect.width > 100 &&
+            rect.height > 100 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            style.opacity !== "0"
+        );
+    });
+
+    if (!visibleImages.length) {
+        return null;
+    }
+
+    return visibleImages
+        .map(img => ({
+            src: img.currentSrc || img.src || "",
+            width: img.naturalWidth || 0,
+            height: img.naturalHeight || 0
+        }))
+        .sort((a, b) => a.src.localeCompare(b.src))
+        .map(x => `${x.src}|${x.width}x${x.height}`)
+        .join("||");
+}
+
+async function moveToNextImage() {
+    const before = getCurrentImageSignature();
+
+    log(`Current image signature: ${before}`);
+
+    nextImage();
+
+    const start = Date.now();
+
+    while (running) {
+        await sleep(200);
+
+        const after = getCurrentImageSignature();
+
+        // The image changed
+        if (after && before && after !== before) {
+            log("✅ Image changed — moving to next image");
+            await sleep(afterNextImage);
+            return true;
+        }
+
+        // Could not detect a previous signature
+        // so give Flow a normal amount of time to update.
+        if (!before && after) {
+            log("✅ Image detected after navigation");
+            await sleep(afterNextImage);
+            return true;
+        }
+
+        // Nothing changed after timeout
+        if (Date.now() - start > timeout) {
+            log("🛑 Right Arrow did not change the image.");
+            log("🏁 Assuming this is the last image.");
+            return false;
+        }
+    }
+
+    return false;
 }
 
 async function download() {
@@ -81,17 +159,22 @@ async function select2K() {
 }
 
 async function run() {
-    log("STARTED — current image will be processed FIRST. Type stop() to stop.");
+    log("🚀 STARTED");
+    log("Current image will be processed FIRST.");
+    log("Type stop() at any time to stop.");
 
     while (running) {
         iteration++;
 
-        log(`========== ${iteration} ==========`);
+        log(`========== IMAGE ${iteration} ==========`);
 
         try {
-            // FIRST: process the image currently open
+            // --------------------------------
+            // 1. PROCESS CURRENT IMAGE
+            // --------------------------------
+
             log("Processing current image...");
-            
+
             await download();
 
             await select2K();
@@ -99,23 +182,42 @@ async function run() {
             log(`Waiting ${afterUpscaleClick}ms...`);
             await sleep(afterUpscaleClick);
 
-            log(`Iteration ${iteration} complete`);
+            log(`✅ Image ${iteration} processed`);
 
-            // THEN: move to the next image
-            if (running) {
-                nextImage();
+            // --------------------------------
+            // 2. MOVE TO NEXT IMAGE
+            // --------------------------------
 
-                log(`Waiting ${afterNextImage}ms for next image...`);
-                await sleep(afterNextImage);
+            if (!running) break;
+
+            const changed = await moveToNextImage();
+
+            // --------------------------------
+            // 3. STOP IF RIGHT ARROW DID NOTHING
+            // --------------------------------
+
+            if (!changed) {
+                log("================================");
+                log("🏁 LAST IMAGE REACHED");
+                log(`Processed ${iteration} image(s).`);
+                log("Automation finished.");
+                log("================================");
+
+                running = false;
+                break;
             }
 
         } catch (err) {
             console.error("[Flow Auto]", err);
-            await sleep(2000);
+
+            if (running) {
+                log("Error encountered. Retrying...");
+                await sleep(2000);
+            }
         }
     }
 
-    log("Automation stopped");
+    log("Automation stopped.");
 }
 
 run();
